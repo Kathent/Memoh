@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"syscall"
@@ -108,9 +110,10 @@ type Service interface {
 }
 
 type DefaultService struct {
-	client    *containerd.Client
-	namespace string
-	logger    *slog.Logger
+	client     *containerd.Client
+	namespace  string
+	taskLogDir string
+	logger     *slog.Logger
 }
 
 func NewDefaultService(log *slog.Logger, client *containerd.Client, cfg config.Config) *DefaultService {
@@ -119,9 +122,10 @@ func NewDefaultService(log *slog.Logger, client *containerd.Client, cfg config.C
 		namespace = DefaultNamespace
 	}
 	return &DefaultService{
-		client:    client,
-		namespace: namespace,
-		logger:    log.With(slog.String("service", "containerd")),
+		client:     client,
+		namespace:  namespace,
+		taskLogDir: strings.TrimSpace(cfg.MCP.TaskLogDir),
+		logger:     log.With(slog.String("service", "containerd")),
 	}
 }
 
@@ -425,11 +429,36 @@ func (s *DefaultService) StartContainer(ctx context.Context, containerID string,
 		return err
 	}
 
-	task, err := container.NewTask(ctx, cio.NullIO)
+	taskIO, err := s.taskCreator(containerID)
+	if err != nil {
+		return err
+	}
+
+	task, err := container.NewTask(ctx, taskIO)
 	if err != nil {
 		return err
 	}
 	return task.Start(ctx)
+}
+
+func (s *DefaultService) taskCreator(containerID string) (cio.Creator, error) {
+	if s.taskLogDir == "" {
+		return cio.NullIO, nil
+	}
+
+	logDir := s.taskLogDir
+	if !filepath.IsAbs(logDir) {
+		absDir, err := filepath.Abs(logDir)
+		if err != nil {
+			return nil, fmt.Errorf("resolve task log dir: %w", err)
+		}
+		logDir = absDir
+	}
+	if err := os.MkdirAll(logDir, 0o755); err != nil {
+		return nil, fmt.Errorf("create task log dir: %w", err)
+	}
+	logPath := filepath.Join(logDir, containerID+".log")
+	return cio.LogFile(logPath), nil
 }
 
 func (s *DefaultService) getTask(ctx context.Context, containerID string) (containerd.Task, error) {

@@ -81,6 +81,7 @@ type MCPConfig struct {
 	DataRoot     string `toml:"data_root"`
 	CNIBinaryDir string `toml:"cni_bin_dir"`
 	CNIConfigDir string `toml:"cni_conf_dir"`
+	TaskLogDir   string `toml:"task_log_dir"`
 }
 
 // ImageRef returns the fully qualified image reference, prepending the
