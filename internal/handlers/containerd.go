@@ -230,9 +230,19 @@ func (h *ContainerdHandler) CreateContainer(c echo.Context) error {
 // running. If the container is missing (e.g. after a VM restart) it is recreated via
 // SetupBotContainer. This prevents permanent desync between DB and containerd state.
 func (h *ContainerdHandler) ensureContainerAndTask(ctx context.Context, containerID, botID string) error {
+	h.logger.Info("ensure container/task: begin",
+		slog.String("bot_id", botID),
+		slog.String("container_id", containerID),
+	)
+
 	_, err := h.service.GetContainer(ctx, containerID)
 	if err != nil {
 		if !errdefs.IsNotFound(err) {
+			h.logger.Error("ensure container/task: get container failed",
+				slog.String("bot_id", botID),
+				slog.String("container_id", containerID),
+				slog.Any("error", err),
+			)
 			return err
 		}
 		h.logger.Warn("container missing in containerd, rebuilding",
@@ -246,15 +256,47 @@ func (h *ContainerdHandler) ensureContainerAndTask(ctx context.Context, containe
 		Filter: "container.id==" + containerID,
 	})
 	if err != nil {
+		h.logger.Error("ensure container/task: list tasks failed",
+			slog.String("bot_id", botID),
+			slog.String("container_id", containerID),
+			slog.Any("error", err),
+		)
 		return err
 	}
+	h.logger.Info("ensure container/task: task query complete",
+		slog.String("bot_id", botID),
+		slog.String("container_id", containerID),
+		slog.Int("task_count", len(tasks)),
+	)
 	if len(tasks) > 0 {
+		h.logger.Info("ensure container/task: found existing task",
+			slog.String("bot_id", botID),
+			slog.String("container_id", containerID),
+			slog.String("task_id", tasks[0].ID),
+			slog.String("task_status", fmt.Sprint(tasks[0].Status)),
+			slog.Int64("pid", int64(tasks[0].PID)),
+			slog.Uint64("exit_code", uint64(tasks[0].ExitCode)),
+		)
 		if tasks[0].Status == ctr.TaskStatusRunning {
+			h.logger.Info("ensure container/task: task already running, setup network",
+				slog.String("bot_id", botID),
+				slog.String("container_id", containerID),
+			)
 			if err := h.setupNetworkOrFail(ctx, containerID, botID); err != nil {
 				return err
 			}
+			h.logger.Info("ensure container/task: running task is ready",
+				slog.String("bot_id", botID),
+				slog.String("container_id", containerID),
+			)
 			return nil
 		}
+		h.logger.Warn("ensure container/task: existing task is not running, deleting before restart",
+			slog.String("bot_id", botID),
+			slog.String("container_id", containerID),
+			slog.String("task_id", tasks[0].ID),
+			slog.String("task_status", fmt.Sprint(tasks[0].Status)),
+		)
 		if err := h.service.DeleteTask(ctx, containerID, &ctr.DeleteTaskOptions{Force: true}); err != nil {
 			if !errdefs.IsNotFound(err) {
 				h.logger.Warn("cleanup: delete task failed", slog.String("container_id", containerID), slog.Any("error", err))
@@ -263,10 +305,30 @@ func (h *ContainerdHandler) ensureContainerAndTask(ctx context.Context, containe
 		}
 	}
 
+	h.logger.Info("ensure container/task: starting task",
+		slog.String("bot_id", botID),
+		slog.String("container_id", containerID),
+	)
 	if err := h.service.StartContainer(ctx, containerID, nil); err != nil {
+		h.logger.Error("ensure container/task: start task failed",
+			slog.String("bot_id", botID),
+			slog.String("container_id", containerID),
+			slog.Any("error", err),
+		)
 		return err
 	}
-	return h.setupNetworkOrFail(ctx, containerID, botID)
+	h.logger.Info("ensure container/task: task start returned success, setup network",
+		slog.String("bot_id", botID),
+		slog.String("container_id", containerID),
+	)
+	if err := h.setupNetworkOrFail(ctx, containerID, botID); err != nil {
+		return err
+	}
+	h.logger.Info("ensure container/task: completed",
+		slog.String("bot_id", botID),
+		slog.String("container_id", containerID),
+	)
+	return nil
 }
 
 // setupNetworkOrFail attempts CNI network setup with one retry. Returns an error
@@ -274,6 +336,11 @@ func (h *ContainerdHandler) ensureContainerAndTask(ctx context.Context, containe
 func (h *ContainerdHandler) setupNetworkOrFail(ctx context.Context, containerID, botID string) error {
 	var lastErr error
 	for attempt := 0; attempt < 2; attempt++ {
+		h.logger.Info("network setup attempt started",
+			slog.String("bot_id", botID),
+			slog.String("container_id", containerID),
+			slog.Int("attempt", attempt+1),
+		)
 		netResult, err := h.service.SetupNetwork(ctx, ctr.NetworkSetupRequest{
 			ContainerID: containerID,
 			CNIBinDir:   h.cfg.CNIBinaryDir,
@@ -289,11 +356,22 @@ func (h *ContainerdHandler) setupNetworkOrFail(ctx context.Context, containerID,
 		}
 		if netResult.IP == "" {
 			lastErr = fmt.Errorf("network setup returned no IP for %s", containerID)
+			h.logger.Warn("network setup attempt returned empty IP",
+				slog.String("bot_id", botID),
+				slog.String("container_id", containerID),
+				slog.Int("attempt", attempt+1),
+			)
 			continue
 		}
 		if h.manager != nil {
 			h.manager.SetContainerIP(botID, netResult.IP)
 		}
+		h.logger.Info("network setup succeeded",
+			slog.String("bot_id", botID),
+			slog.String("container_id", containerID),
+			slog.Int("attempt", attempt+1),
+			slog.String("ip", netResult.IP),
+		)
 		return nil
 	}
 	return fmt.Errorf("network setup failed for container %s: %w", containerID, lastErr)
@@ -948,6 +1026,12 @@ func (h *ContainerdHandler) ReconcileContainers(ctx context.Context) {
 	for _, row := range rows {
 		containerID := row.ContainerID
 		botID := uuid.UUID(row.BotID.Bytes).String()
+		h.logger.Info("reconcile: checking bot container",
+			slog.String("bot_id", botID),
+			slog.String("container_id", containerID),
+			slog.String("db_status", row.Status),
+			slog.Bool("auto_start", row.AutoStart),
+		)
 
 		_, err := h.service.GetContainer(ctx, containerID)
 		if err != nil {

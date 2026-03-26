@@ -283,6 +283,10 @@ func (m *Manager) ListBots(ctx context.Context) ([]string, error) {
 
 func (m *Manager) Start(ctx context.Context, botID string) error {
 	containerID := m.containerID(botID)
+	m.logger.Info("manager start: begin",
+		slog.String("bot_id", botID),
+		slog.String("container_id", containerID),
+	)
 
 	// Before creating a new container, check for an orphaned snapshot
 	// (container deleted but snapshot with /data survived). Export /data
@@ -290,38 +294,81 @@ func (m *Manager) Start(ctx context.Context, botID string) error {
 	// container. This covers dev image rebuilds, containerd metadata loss,
 	// and manual container deletion.
 	if _, err := m.service.GetContainer(ctx, containerID); errdefs.IsNotFound(err) {
+		m.logger.Warn("manager start: container missing before ensure, attempting orphaned snapshot recovery",
+			slog.String("bot_id", botID),
+			slog.String("container_id", containerID),
+		)
 		m.recoverOrphanedSnapshot(ctx, botID)
 	}
 
+	m.logger.Info("manager start: ensure bot container",
+		slog.String("bot_id", botID),
+		slog.String("container_id", containerID),
+	)
 	if err := m.EnsureBot(ctx, botID); err != nil {
+		m.logger.Error("manager start: ensure bot container failed",
+			slog.String("bot_id", botID),
+			slog.String("container_id", containerID),
+			slog.Any("error", err),
+		)
 		return err
 	}
+	m.logger.Info("manager start: ensure bot container complete",
+		slog.String("bot_id", botID),
+		slog.String("container_id", containerID),
+	)
 
 	// Restore preserved data (from orphaned snapshot recovery or a previous
 	// CleanupBotContainer with preserveData) into the fresh snapshot before
 	// starting the task, avoiding a redundant stop/start cycle.
 	if m.HasPreservedData(botID) {
+		m.logger.Info("manager start: preserved data detected, restoring into snapshot",
+			slog.String("bot_id", botID),
+			slog.String("container_id", containerID),
+		)
 		if err := m.restorePreservedIntoSnapshot(ctx, botID); err != nil {
 			m.logger.Warn("restore preserved data into new container failed",
 				slog.String("bot_id", botID), slog.Any("error", err))
 		}
 	}
 
+	m.logger.Info("manager start: starting task",
+		slog.String("bot_id", botID),
+		slog.String("container_id", containerID),
+	)
 	if err := m.service.StartContainer(ctx, containerID, nil); err != nil {
+		m.logger.Error("manager start: start task failed",
+			slog.String("bot_id", botID),
+			slog.String("container_id", containerID),
+			slog.Any("error", err),
+		)
 		return err
 	}
+	m.logger.Info("manager start: task start returned success, setup network",
+		slog.String("bot_id", botID),
+		slog.String("container_id", containerID),
+	)
 	netResult, err := m.service.SetupNetwork(ctx, ctr.NetworkSetupRequest{
 		ContainerID: containerID,
 		CNIBinDir:   m.cfg.CNIBinaryDir,
 		CNIConfDir:  m.cfg.CNIConfigDir,
 	})
 	if err != nil {
+		m.logger.Error("manager start: network setup failed after task start",
+			slog.String("bot_id", botID),
+			slog.String("container_id", containerID),
+			slog.Any("error", err),
+		)
 		if stopErr := m.service.StopContainer(ctx, containerID, &ctr.StopTaskOptions{Force: true}); stopErr != nil {
 			m.logger.Warn("cleanup: stop task failed", slog.String("container_id", containerID), slog.Any("error", stopErr))
 		}
 		return err
 	}
 	if netResult.IP == "" {
+		m.logger.Error("manager start: network setup returned empty IP",
+			slog.String("bot_id", botID),
+			slog.String("container_id", containerID),
+		)
 		if stopErr := m.service.StopContainer(ctx, containerID, &ctr.StopTaskOptions{Force: true}); stopErr != nil {
 			m.logger.Warn("cleanup: stop task failed", slog.String("container_id", containerID), slog.Any("error", stopErr))
 		}
@@ -329,6 +376,11 @@ func (m *Manager) Start(ctx context.Context, botID string) error {
 	}
 	m.SetContainerIP(botID, netResult.IP)
 	m.logger.Info("container network ready", slog.String("bot_id", botID), slog.String("ip", netResult.IP))
+	m.logger.Info("manager start: completed",
+		slog.String("bot_id", botID),
+		slog.String("container_id", containerID),
+		slog.String("ip", netResult.IP),
+	)
 	return nil
 }
 

@@ -116,6 +116,13 @@ type DefaultService struct {
 	logger     *slog.Logger
 }
 
+func (s *DefaultService) log() *slog.Logger {
+	if s.logger != nil {
+		return s.logger
+	}
+	return slog.Default()
+}
+
 func NewDefaultService(log *slog.Logger, client *containerd.Client, cfg config.Config) *DefaultService {
 	namespace := cfg.Containerd.Namespace
 	if namespace == "" {
@@ -424,25 +431,67 @@ func (s *DefaultService) StartContainer(ctx context.Context, containerID string,
 	}
 
 	ctx = s.withNamespace(ctx)
+	log := s.log()
+	log.Info("start container: load container",
+		slog.String("container_id", containerID),
+		slog.String("namespace", s.namespace),
+	)
 	container, err := s.client.LoadContainer(ctx, containerID)
 	if err != nil {
+		log.Error("start container: load container failed",
+			slog.String("container_id", containerID),
+			slog.String("namespace", s.namespace),
+			slog.Any("error", err),
+		)
 		return err
 	}
 
 	taskIO, err := s.taskCreator(containerID)
 	if err != nil {
+		log.Error("start container: create task IO failed",
+			slog.String("container_id", containerID),
+			slog.Any("error", err),
+		)
 		return err
 	}
 
+	log.Info("start container: creating task",
+		slog.String("container_id", containerID),
+	)
 	task, err := container.NewTask(ctx, taskIO)
 	if err != nil {
+		log.Error("start container: create task failed",
+			slog.String("container_id", containerID),
+			slog.Any("error", err),
+		)
 		return err
 	}
-	return task.Start(ctx)
+	log.Info("start container: task created",
+		slog.String("container_id", containerID),
+		slog.String("task_id", task.ID()),
+	)
+	if err := task.Start(ctx); err != nil {
+		log.Error("start container: task start failed",
+			slog.String("container_id", containerID),
+			slog.String("task_id", task.ID()),
+			slog.Any("error", err),
+		)
+		return err
+	}
+	log.Info("start container: task started",
+		slog.String("container_id", containerID),
+		slog.String("task_id", task.ID()),
+		slog.Int64("pid", int64(task.Pid())),
+	)
+	return nil
 }
 
 func (s *DefaultService) taskCreator(containerID string) (cio.Creator, error) {
+	log := s.log()
 	if s.taskLogDir == "" {
+		log.Debug("task log disabled, using null IO",
+			slog.String("container_id", containerID),
+		)
 		return cio.NullIO, nil
 	}
 
@@ -458,6 +507,10 @@ func (s *DefaultService) taskCreator(containerID string) (cio.Creator, error) {
 		return nil, fmt.Errorf("create task log dir: %w", err)
 	}
 	logPath := filepath.Join(logDir, containerID+".log")
+	log.Info("task log enabled",
+		slog.String("container_id", containerID),
+		slog.String("log_path", logPath),
+	)
 	return cio.LogFile(logPath), nil
 }
 
@@ -740,14 +793,34 @@ func (s *DefaultService) SnapshotMounts(ctx context.Context, snapshotter, key st
 
 func (s *DefaultService) SetupNetwork(ctx context.Context, req NetworkSetupRequest) (NetworkResult, error) {
 	ctx = s.withNamespace(ctx)
+	log := s.log()
+	log.Info("setup network: begin",
+		slog.String("container_id", req.ContainerID),
+		slog.String("cni_bin_dir", req.CNIBinDir),
+		slog.String("cni_conf_dir", req.CNIConfDir),
+	)
 	task, err := s.getTask(ctx, req.ContainerID)
 	if err != nil {
+		log.Error("setup network: get task failed",
+			slog.String("container_id", req.ContainerID),
+			slog.Any("error", err),
+		)
 		return NetworkResult{}, err
 	}
 	ip, err := setupCNINetwork(ctx, task, req.ContainerID, req.CNIBinDir, req.CNIConfDir)
 	if err != nil {
+		log.Error("setup network: cni setup failed",
+			slog.String("container_id", req.ContainerID),
+			slog.String("task_id", task.ID()),
+			slog.Any("error", err),
+		)
 		return NetworkResult{}, err
 	}
+	log.Info("setup network: success",
+		slog.String("container_id", req.ContainerID),
+		slog.String("task_id", task.ID()),
+		slog.String("ip", ip),
+	)
 	return NetworkResult{IP: ip}, nil
 }
 
