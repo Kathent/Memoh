@@ -1004,6 +1004,17 @@ func (h *ContainerdHandler) isTaskRunning(ctx context.Context, containerID strin
 	return err == nil && len(tasks) > 0 && tasks[0].Status == ctr.TaskStatusRunning
 }
 
+func isMissingTaskErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errdefs.IsNotFound(err) {
+		return true
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "no running task found") || strings.Contains(msg, "task ") && strings.Contains(msg, " not found")
+}
+
 // ReconcileContainers compares the DB containers table against actual containerd
 // state on startup. For each auto_start container in DB it verifies the container
 // and task exist; if missing they are rebuilt via SetupBotContainer. Containers that
@@ -1067,6 +1078,31 @@ func (h *ContainerdHandler) ReconcileContainers(ctx context.Context) {
 				}
 			}
 			if netErr := h.setupNetworkOrFail(ctx, containerID, botID); netErr != nil {
+				if isMissingTaskErr(netErr) {
+					h.logger.Warn("reconcile: running task path hit missing task, retrying full task recovery",
+						slog.String("bot_id", botID),
+						slog.String("container_id", containerID),
+						slog.Any("error", netErr))
+					if recoverErr := h.ensureContainerAndTask(ctx, containerID, botID); recoverErr != nil {
+						h.logger.Error("reconcile: full task recovery after missing task failed",
+							slog.String("bot_id", botID),
+							slog.String("container_id", containerID),
+							slog.Any("error", recoverErr))
+						if dbErr := h.queries.UpdateContainerStopped(ctx, row.BotID); dbErr != nil {
+							h.logger.Error("reconcile: failed to mark container as stopped",
+								slog.String("bot_id", botID), slog.Any("error", dbErr))
+						}
+					} else {
+						h.logger.Info("reconcile: full task recovery after missing task succeeded",
+							slog.String("bot_id", botID),
+							slog.String("container_id", containerID))
+						if dbErr := h.queries.UpdateContainerStarted(ctx, row.BotID); dbErr != nil {
+							h.logger.Error("reconcile: failed to update DB status to running",
+								slog.String("bot_id", botID), slog.Any("error", dbErr))
+						}
+					}
+					continue
+				}
 				h.logger.Error("reconcile: network setup failed for running task, container unreachable",
 					slog.String("bot_id", botID),
 					slog.String("container_id", containerID),

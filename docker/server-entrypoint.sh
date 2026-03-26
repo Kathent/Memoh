@@ -2,6 +2,9 @@
 set -e
 
 MCP_IMAGE="${MCP_IMAGE:-docker.io/library/memoh-mcp:latest}"
+CONTAINERD_LOG_DEST="${CONTAINERD_LOG_DEST:-stdout}"
+CONTAINERD_LOG_LEVEL="${CONTAINERD_LOG_LEVEL:-info}"
+CONTAINERD_LOG_FILE="${CONTAINERD_LOG_FILE:-/opt/memoh/logs/containerd.log}"
 
 # ---- Clean up stale CNI state from previous runs ----
 # After a container restart the cni0 bridge may linger with a zeroed MAC
@@ -29,7 +32,25 @@ fi
 
 # ---- Start containerd in background ----
 mkdir -p /run/containerd
-containerd &
+case "$CONTAINERD_LOG_DEST" in
+  stdout)
+    echo "Starting containerd with logs to stdout (level=${CONTAINERD_LOG_LEVEL})"
+    containerd --log-level "${CONTAINERD_LOG_LEVEL}" &
+    ;;
+  stderr)
+    echo "Starting containerd with logs to stderr (level=${CONTAINERD_LOG_LEVEL})"
+    containerd --log-level "${CONTAINERD_LOG_LEVEL}" >&2 &
+    ;;
+  file)
+    mkdir -p "$(dirname "${CONTAINERD_LOG_FILE}")"
+    echo "Starting containerd with logs to file ${CONTAINERD_LOG_FILE} (level=${CONTAINERD_LOG_LEVEL})"
+    containerd --log-level "${CONTAINERD_LOG_LEVEL}" >>"${CONTAINERD_LOG_FILE}" 2>&1 &
+    ;;
+  *)
+    echo "Unknown CONTAINERD_LOG_DEST=${CONTAINERD_LOG_DEST}, expected stdout|stderr|file"
+    exit 1
+    ;;
+esac
 CONTAINERD_PID=$!
 
 echo "Waiting for containerd..."
