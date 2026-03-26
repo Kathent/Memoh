@@ -147,6 +147,13 @@
             </div>
           </div>
 
+          <div class="space-y-1">
+            <span class="text-xs font-medium text-muted-foreground uppercase">{{ $t('bots.subagents.model') }}</span>
+            <div class="mt-1 text-sm text-foreground">
+              {{ resolveModelLabel(agent.model_id) }}
+            </div>
+          </div>
+
           <!-- Usage summary -->
           <div
             v-if="hasUsageData(agent.usage)"
@@ -200,6 +207,28 @@
               :disabled="isSaving"
               class="min-h-[100px]"
             />
+          </div>
+          <div class="space-y-2">
+            <Label>{{ $t('bots.subagents.model') }}</Label>
+            <ModelSelect
+              v-model="draftAgent.model_id"
+              :models="models"
+              :providers="providers"
+              model-type="chat"
+              :placeholder="$t('bots.subagents.modelPlaceholder')"
+            />
+            <div class="flex items-center justify-between gap-3 text-xs text-muted-foreground">
+              <span>{{ $t('bots.subagents.modelInheritedHint') }}</span>
+              <Button
+                variant="ghost"
+                size="sm"
+                class="h-auto px-2 py-1 text-xs"
+                :disabled="isSaving || !draftAgent.model_id"
+                @click="draftAgent.model_id = ''"
+              >
+                {{ $t('bots.subagents.modelInherited') }}
+              </Button>
+            </div>
           </div>
         </div>
         <DialogFooter>
@@ -298,11 +327,16 @@ import {
 } from '@memoh/ui'
 import ConfirmPopover from '@/components/confirm-popover/index.vue'
 import MessageList from './message-list.vue'
+import ModelSelect from './model-select.vue'
 import {
+  getModels,
+  getProviders,
   getBotsByBotIdSubagents,
   postBotsByBotIdSubagents,
   putBotsByBotIdSubagentsById,
   deleteBotsByBotIdSubagentsById,
+  type ModelsGetResponse,
+  type ProvidersGetResponse,
   type SubagentSubagent
 } from '@memoh/sdk'
 import { resolveApiErrorMessage } from '@/utils/api-error'
@@ -318,13 +352,18 @@ const isLoading = ref(false)
 const isSaving = ref(false)
 const isDeleting = ref(false)
 const deletingId = ref('')
-const subagents = ref<SubagentSubagent[]>([])
+type SubagentItem = SubagentSubagent & { model_id?: string }
+
+const subagents = ref<SubagentItem[]>([])
+const models = ref<ModelsGetResponse[]>([])
+const providers = ref<ProvidersGetResponse[]>([])
 
 const isDialogOpen = ref(false)
 const isEditing = ref(false)
-const draftAgent = ref<SubagentSubagent>({
+const draftAgent = ref<SubagentItem>({
   name: '',
   description: '',
+  model_id: '',
 })
 
 const isContextDialogOpen = ref(false)
@@ -367,16 +406,18 @@ function handleCreate() {
   draftAgent.value = {
     name: '',
     description: '',
+    model_id: '',
   }
   isDialogOpen.value = true
 }
 
-function handleEdit(agent: SubagentSubagent) {
+function handleEdit(agent: SubagentItem) {
   isEditing.value = true
   draftAgent.value = {
     id: agent.id,
     name: agent.name || '',
     description: agent.description || '',
+    model_id: agent.model_id || '',
     metadata: agent.metadata,
   }
   isDialogOpen.value = true
@@ -392,8 +433,9 @@ async function handleSave() {
         body: {
           name: draftAgent.value.name?.trim(),
           description: draftAgent.value.description?.trim(),
+          model_id: draftAgent.value.model_id?.trim() || undefined,
           metadata: draftAgent.value.metadata,
-        },
+        } as any,
         throwOnError: true,
       })
     } else {
@@ -402,10 +444,11 @@ async function handleSave() {
         body: {
           name: draftAgent.value.name?.trim(),
           description: draftAgent.value.description?.trim(),
+          model_id: draftAgent.value.model_id?.trim() || undefined,
           metadata: draftAgent.value.metadata,
           skills: [],
           messages: [],
-        },
+        } as any,
         throwOnError: true,
       })
     }
@@ -438,7 +481,7 @@ async function handleDelete(id?: string) {
   }
 }
 
-function handleViewContext(agent: SubagentSubagent) {
+function handleViewContext(agent: SubagentItem) {
   const msgs = agent.messages || []
   contextMessages.value = msgs.map((m: Record<string, unknown>, idx: number) => ({
     id: String(idx),
@@ -454,7 +497,29 @@ function handleViewContext(agent: SubagentSubagent) {
   isContextDialogOpen.value = true
 }
 
+function resolveModelLabel(modelId?: string) {
+  const id = (modelId || '').trim()
+  if (!id) return t('bots.subagents.modelInherited')
+  const model = models.value.find((item) => item.id === id)
+  if (!model) return id
+  return model.name || model.model_id || id
+}
+
+async function fetchModelOptions() {
+  try {
+    const [{ data: modelData }, { data: providerData }] = await Promise.all([
+      getModels({ throwOnError: true }),
+      getProviders({ throwOnError: true }),
+    ])
+    models.value = modelData || []
+    providers.value = providerData || []
+  } catch (error) {
+    toast.error(resolveApiErrorMessage(error, t('common.loadFailed')))
+  }
+}
+
 onMounted(() => {
+  fetchModelOptions()
   fetchSubagents()
 })
 </script>

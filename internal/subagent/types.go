@@ -6,6 +6,7 @@ type Subagent struct {
 	ID          string           `json:"id"`
 	Name        string           `json:"name"`
 	Description string           `json:"description"`
+	ModelID     string           `json:"model_id,omitempty"`
 	BotID       string           `json:"bot_id"`
 	Messages    []map[string]any `json:"messages"`
 	Metadata    map[string]any   `json:"metadata"`
@@ -20,6 +21,7 @@ type Subagent struct {
 type CreateRequest struct {
 	Name        string           `json:"name"`
 	Description string           `json:"description"`
+	ModelID     string           `json:"model_id,omitempty"`
 	Messages    []map[string]any `json:"messages,omitempty"`
 	Metadata    map[string]any   `json:"metadata,omitempty"`
 	Skills      []string         `json:"skills,omitempty"`
@@ -28,6 +30,7 @@ type CreateRequest struct {
 type UpdateRequest struct {
 	Name        *string        `json:"name,omitempty"`
 	Description *string        `json:"description,omitempty"`
+	ModelID     *string        `json:"model_id,omitempty"`
 	Metadata    map[string]any `json:"metadata,omitempty"`
 }
 

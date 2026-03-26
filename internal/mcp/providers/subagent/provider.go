@@ -170,7 +170,7 @@ func (e *Executor) callQuery(ctx context.Context, session mcpgw.ToolSessionConte
 		return mcpgw.BuildToolErrorResult(fmt.Sprintf("failed to get or create subagent: %v", err)), nil
 	}
 
-	modelCfg, provider, err := e.resolveModel(ctx, botID)
+	modelCfg, provider, err := e.resolveModel(ctx, botID, target.ModelID)
 	if err != nil {
 		return mcpgw.BuildToolErrorResult(fmt.Sprintf("failed to resolve model: %v", err)), nil
 	}
@@ -222,19 +222,23 @@ func (e *Executor) callQuery(ctx context.Context, session mcpgw.ToolSessionConte
 	}), nil
 }
 
-func (e *Executor) resolveModel(ctx context.Context, botID string) (models.GetResponse, sqlc.LlmProvider, error) {
+func (e *Executor) resolveModel(ctx context.Context, botID, subagentModelID string) (models.GetResponse, sqlc.LlmProvider, error) {
 	if e.settings == nil || e.models == nil || e.queries == nil {
 		return models.GetResponse{}, sqlc.LlmProvider{}, errors.New("model resolution services not configured")
 	}
-	botSettings, err := e.settings.GetBot(ctx, botID)
-	if err != nil {
-		return models.GetResponse{}, sqlc.LlmProvider{}, err
+
+	modelID := strings.TrimSpace(subagentModelID)
+	if modelID == "" {
+		botSettings, err := e.settings.GetBot(ctx, botID)
+		if err != nil {
+			return models.GetResponse{}, sqlc.LlmProvider{}, err
+		}
+		modelID = strings.TrimSpace(botSettings.ChatModelID)
+		if modelID == "" {
+			return models.GetResponse{}, sqlc.LlmProvider{}, errors.New("no chat model configured for bot")
+		}
 	}
-	chatModelID := strings.TrimSpace(botSettings.ChatModelID)
-	if chatModelID == "" {
-		return models.GetResponse{}, sqlc.LlmProvider{}, errors.New("no chat model configured for bot")
-	}
-	model, err := e.models.GetByID(ctx, chatModelID)
+	model, err := e.models.GetByID(ctx, modelID)
 	if err != nil {
 		return models.GetResponse{}, sqlc.LlmProvider{}, err
 	}

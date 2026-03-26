@@ -444,6 +444,7 @@ CREATE TABLE IF NOT EXISTS subagents (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   name TEXT NOT NULL,
   description TEXT NOT NULL,
+  model_id UUID REFERENCES models(id) ON DELETE SET NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   deleted BOOLEAN NOT NULL DEFAULT false,

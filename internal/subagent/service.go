@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/memohai/memoh/internal/db"
 	"github.com/memohai/memoh/internal/db/sqlc"
@@ -53,9 +54,14 @@ func (s *Service) Create(ctx context.Context, botID string, req CreateRequest) (
 	if err != nil {
 		return Subagent{}, err
 	}
+	modelID, err := parseNullableUUID(req.ModelID)
+	if err != nil {
+		return Subagent{}, err
+	}
 	row, err := s.queries.CreateSubagent(ctx, sqlc.CreateSubagentParams{
 		Name:        name,
 		Description: description,
+		ModelID:     modelID,
 		BotID:       pgBotID,
 		Messages:    messagesPayload,
 		Metadata:    metadataPayload,
@@ -155,7 +161,15 @@ func (s *Service) Update(ctx context.Context, id string, req UpdateRequest) (Sub
 	if err != nil {
 		return Subagent{}, err
 	}
+	modelID := existing.ModelID
+	if req.ModelID != nil {
+		modelID = strings.TrimSpace(*req.ModelID)
+	}
 	pgID, err := db.ParseUUID(id)
+	if err != nil {
+		return Subagent{}, err
+	}
+	pgModelID, err := parseNullableUUID(modelID)
 	if err != nil {
 		return Subagent{}, err
 	}
@@ -163,6 +177,7 @@ func (s *Service) Update(ctx context.Context, id string, req UpdateRequest) (Sub
 		ID:          pgID,
 		Name:        name,
 		Description: description,
+		ModelID:     pgModelID,
 		Metadata:    metadataPayload,
 	})
 	if err != nil {
@@ -287,6 +302,9 @@ func toSubagent(row sqlc.Subagent) (Subagent, error) {
 	if row.CreatedAt.Valid {
 		item.CreatedAt = row.CreatedAt.Time
 	}
+	if row.ModelID.Valid {
+		item.ModelID = row.ModelID.String()
+	}
 	if row.UpdatedAt.Valid {
 		item.UpdatedAt = row.UpdatedAt.Time
 	}
@@ -399,4 +417,12 @@ func mergeSkills(existing []string, incoming []string) []string {
 	merged := append([]string{}, existing...)
 	merged = append(merged, incoming...)
 	return normalizeSkills(merged)
+}
+
+func parseNullableUUID(value string) (pgtype.UUID, error) {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return pgtype.UUID{}, nil
+	}
+	return db.ParseUUID(trimmed)
 }
