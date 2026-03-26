@@ -252,32 +252,17 @@ func (h *ContainerdHandler) ensureContainerAndTask(ctx context.Context, containe
 		return h.SetupBotContainer(ctx, botID)
 	}
 
-	tasks, err := h.service.ListTasks(ctx, &ctr.ListTasksOptions{
-		Filter: "container.id==" + containerID,
-	})
-	if err != nil {
-		h.logger.Error("ensure container/task: list tasks failed",
-			slog.String("bot_id", botID),
-			slog.String("container_id", containerID),
-			slog.Any("error", err),
-		)
-		return err
-	}
-	h.logger.Info("ensure container/task: task query complete",
-		slog.String("bot_id", botID),
-		slog.String("container_id", containerID),
-		slog.Int("task_count", len(tasks)),
-	)
-	if len(tasks) > 0 {
+	taskInfo, err := h.service.GetTaskInfo(ctx, containerID)
+	if err == nil {
 		h.logger.Info("ensure container/task: found existing task",
 			slog.String("bot_id", botID),
 			slog.String("container_id", containerID),
-			slog.String("task_id", tasks[0].ID),
-			slog.String("task_status", fmt.Sprint(tasks[0].Status)),
-			slog.Int64("pid", int64(tasks[0].PID)),
-			slog.Uint64("exit_code", uint64(tasks[0].ExitCode)),
+			slog.String("task_id", taskInfo.ID),
+			slog.String("task_status", taskInfo.Status.String()),
+			slog.Int64("pid", int64(taskInfo.PID)),
+			slog.Uint64("exit_code", uint64(taskInfo.ExitCode)),
 		)
-		if tasks[0].Status == ctr.TaskStatusRunning {
+		if taskInfo.Status == ctr.TaskStatusRunning {
 			h.logger.Info("ensure container/task: task already running, setup network",
 				slog.String("bot_id", botID),
 				slog.String("container_id", containerID),
@@ -294,8 +279,8 @@ func (h *ContainerdHandler) ensureContainerAndTask(ctx context.Context, containe
 		h.logger.Warn("ensure container/task: existing task is not running, deleting before restart",
 			slog.String("bot_id", botID),
 			slog.String("container_id", containerID),
-			slog.String("task_id", tasks[0].ID),
-			slog.String("task_status", fmt.Sprint(tasks[0].Status)),
+			slog.String("task_id", taskInfo.ID),
+			slog.String("task_status", taskInfo.Status.String()),
 		)
 		if err := h.service.DeleteTask(ctx, containerID, &ctr.DeleteTaskOptions{Force: true}); err != nil {
 			if !errdefs.IsNotFound(err) {
@@ -303,6 +288,18 @@ func (h *ContainerdHandler) ensureContainerAndTask(ctx context.Context, containe
 				return err
 			}
 		}
+	} else if !isMissingTaskErr(err) {
+		h.logger.Error("ensure container/task: get task info failed",
+			slog.String("bot_id", botID),
+			slog.String("container_id", containerID),
+			slog.Any("error", err),
+		)
+		return err
+	} else {
+		h.logger.Info("ensure container/task: no existing task found",
+			slog.String("bot_id", botID),
+			slog.String("container_id", containerID),
+		)
 	}
 
 	h.logger.Info("ensure container/task: starting task",
@@ -998,10 +995,8 @@ func (h *ContainerdHandler) CleanupBotContainer(ctx context.Context, botID strin
 }
 
 func (h *ContainerdHandler) isTaskRunning(ctx context.Context, containerID string) bool {
-	tasks, err := h.service.ListTasks(ctx, &ctr.ListTasksOptions{
-		Filter: "container.id==" + containerID,
-	})
-	return err == nil && len(tasks) > 0 && tasks[0].Status == ctr.TaskStatusRunning
+	task, err := h.service.GetTaskInfo(ctx, containerID)
+	return err == nil && task.Status == ctr.TaskStatusRunning
 }
 
 func isMissingTaskErr(err error) bool {
